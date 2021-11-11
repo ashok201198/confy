@@ -1,7 +1,7 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, MetaData
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
-from .settings import DATABASES
+from confy.settings import DATABASES
 
 engine_host = DATABASES['default']['HOST']
 engine_port = str(3306)
@@ -11,7 +11,8 @@ engine_type = 'mysql'
 engine_db = DATABASES['default']['NAME']
 engine_data = engine_type + '://' + engine_user + ':' + engine_password + '@' + engine_host + ':' + engine_port + '/' + engine_db
 engine = create_engine(engine_data, echo=True)
-Session = scoped_session(sessionmaker(bind=engine))
+session = scoped_session(sessionmaker(bind=engine))
+metadata = MetaData()
+Base = declarative_base(metadata=metadata)
+Base.query = session.query_property()
 
-Base = declarative_base()
-Base.query = Session.query_property()
