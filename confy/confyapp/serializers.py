@@ -2,8 +2,10 @@ import ipdb
 from rest_framework import serializers
 from sqlalchemy.exc import SQLAlchemyError
 
-from confyapp.exceptions import NoRecordFoundException
+from confyapp.exceptions import NoRecordFoundException, CantScheduleException, AlreadyRegisteredException, \
+    CantUpdateFieldException
 from confyapp.models import *
+from confyapp.utils import *
 
 
 class BaseSerializer:
@@ -11,6 +13,7 @@ class BaseSerializer:
         model = None
         session = session()
         fields = '__all__'
+        update_allowed_fields = ()
 
     def __init__(self, data=None, many=False):
         result = dict()
@@ -43,7 +46,6 @@ class BaseSerializer:
         try:
             if function:
                 getattr(bound_session, function)(**params)
-            ipdb.set_trace()
             bound_session.commit()
         except Exception:
             bound_session.rollback()
@@ -58,6 +60,8 @@ class BaseSerializer:
     def update(self, entry, data):
         validated_data = self.validate_data(data, entry)
         for k, v in validated_data.items():
+            if k not in self.Meta.update_allowed_fields:
+                raise CantUpdateFieldException(params=(k,))
             if hasattr(entry, k):
                 setattr(entry, k, v)
         self.perform_operation(params={'instance': entry})
@@ -76,6 +80,7 @@ class PersonSerializer(BaseSerializer):
         model = Person
         session = session()
         fields = '__all__'
+        update_allowed_fields = ('first_name', 'last_name', 'username', 'email')
 
 
 class ConferenceSerializer(BaseSerializer):
@@ -83,12 +88,7 @@ class ConferenceSerializer(BaseSerializer):
         model = Conference
         session = session()
         fields = '__all__'
-
-    # def validate_data(self, data, entry=None):
-    #     prefilled = dict()
-    #     if entry:
-    #         prefilled = entry.as_dict()
-    #     if 'start_date' in
+        update_allowed_fields = ('title', 'description', 'start_date', 'end_date')
 
 
 class TalkSerializer(BaseSerializer):
@@ -96,6 +96,48 @@ class TalkSerializer(BaseSerializer):
         model = Talk
         session = session()
         fields = '__all__'
+        update_allowed_fields = ('title', 'description', 'duration', 'start_date', 'end_date')
+
+    def verify_creation(self, conference_id, talk):
+        # ipdb.set_trace()
+        conference = Conference.query.get(conference_id)
+        if conference is None:
+            raise NoRecordFoundException(params=("conference"))
+        talks = self.Meta.session.query(Talk).filter_by(conference_id=conference_id).order_by(Talk.start_date).all()
+        idx = talk['id'] if 'id' in talk else None
+        start_date = convertStringToDatetime(talk['start_date'])
+        if 'end_date' not in talk:
+            if 'duration' not in talk:
+                raise ApiException("Should provide at least end_date or duration")
+            end_date = (start_date + timedelta(minutes=talk['duration']))
+            talk['end_date'] = convertDatetimeToString(end_date)
+        else:
+            end_date = convertStringToDatetime(talk['end_date'])
+        if not (conference.end_date >= end_date and start_date >= conference.start_date):
+            raise CantScheduleException(params=(
+                "as conference of id {} start_date {}, end_date {}".format(conference.id, conference.start_date,
+                                                                                        conference.end_date)))
+
+        for italk in talks:
+            val = 0
+            if idx and idx != italk.id:
+                val = isOverlapping((italk.start_date, italk.end_date), (start_date, end_date))
+            if val == 1:
+                break
+            elif val == -1:
+                raise CantScheduleException(params=(
+                    "as conflicting with talk_id {} with start_date {}, end_date {}".format(italk.id, italk.start_date,
+                                                                                            italk.end_date)))
+
+    def create(self, data):
+        self.verify_creation(data['conference_id'], data)
+        super().create(data)
+
+    def update(self, entry, data):
+        updated_data = entry.as_dict()
+        updated_data.update(data)
+        self.verify_creation(updated_data['conference_id'], updated_data)
+        super().update(entry, data)
 
 
 class AttendeeSerializer(BaseSerializer):
@@ -103,3 +145,32 @@ class AttendeeSerializer(BaseSerializer):
         model = Attendee
         session = session()
         fields = '__all__'
+        update_allowed_fields = ('role',)
+
+    def verify_creation(self, person_id, event):
+        # ipdb.set_trace()
+        person = Person.query.get(person_id)
+        if person is None:
+            raise NoRecordFoundException(params=("person"))
+        talk = Talk.query.get(event['talk_id'])
+        if talk is None:
+            raise NoRecordFoundException(params=("talk"))
+        talks = self.Meta.session.query(Talk).join(Attendee).filter(Attendee.person_id == person_id).order_by(
+            Talk.start_date).all()
+        start_date = talk.start_date
+        end_date = talk.end_date
+        for italk in talks:
+            if talk.id != italk.id:
+                val = isOverlapping((italk.start_date, italk.end_date), (start_date, end_date))
+            else:
+                raise AlreadyRegisteredException()
+            if val == 1:
+                break
+            elif val == -1:
+                raise CantScheduleException(params=(
+                    "as conflicting with talk_id {} with start_date {}, end_date {}".format(italk.id, italk.start_date,
+                                                                                            italk.end_date)))
+
+    def create(self, data):
+        self.verify_creation(data['person_id'], data)
+        super().create(data)

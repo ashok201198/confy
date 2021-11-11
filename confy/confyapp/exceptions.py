@@ -9,11 +9,23 @@ class ApiException(BaseException):
 
 class NoRecordFoundException(ApiException):
 
-    def __init__(self, message="No record found"):
-        self.message = message
+    def __init__(self, message="No record found of type {}", params=()):
+        self.message = message.format(params)
 
 
 class CantScheduleException(ApiException):
 
-    def __init__(self, message="Unable to schedule"):
-        self.message = message
+    def __init__(self, message="Unable to schedule {}", params=()):
+        self.message = message.format(params)
+
+
+class AlreadyRegisteredException(ApiException):
+
+    def __init__(self, message="Already registered", params=()):
+        self.message = message.format(params)
+
+
+class CantUpdateFieldException(ApiException):
+
+    def __init__(self, message="Can't update the field {}", params=()):
+        self.message = message.format(params)
